@@ -51,6 +51,7 @@ function resolveMigrationsDir(): string {
 
   candidates.push(
     path.resolve(process.cwd(), "lib/db/drizzle"),
+    path.resolve(process.cwd(), "dist/drizzle"),
     path.resolve(process.cwd(), "artifacts/api-server/dist/drizzle"),
   );
 

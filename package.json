@@ -2,15 +2,22 @@
   "name": "workspace",
   "version": "0.0.0",
   "license": "MIT",
+  "packageManager": "pnpm@10.6.5",
   "scripts": {
     "preinstall": "sh -c 'rm -f package-lock.json yarn.lock; case \"$npm_config_user_agent\" in pnpm/*) ;; *) echo \"Use pnpm instead\" >&2; exit 1 ;; esac'",
     "build": "pnpm run typecheck && pnpm -r --if-present run build",
+    "cf:api:deploy": "wrangler deploy -c wrangler.api.jsonc --keep-vars",
+    "cf:api:dry-run": "wrangler deploy -c wrangler.api.jsonc --dry-run --containers-rollout=none",
+    "cf:web:deploy": "wrangler deploy -c wrangler.jsonc --keep-vars",
+    "cf:web:dry-run": "wrangler deploy -c wrangler.jsonc --dry-run",
     "typecheck:libs": "tsc --build",
     "typecheck": "pnpm run typecheck:libs && pnpm -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck"
   },
   "private": true,
   "devDependencies": {
+    "@cloudflare/containers": "0.3.7",
+    "prettier": "^3.8.1",
     "typescript": "~5.9.2",
-    "prettier": "^3.8.1"
+    "wrangler": "^4.100.0"
   }
 }

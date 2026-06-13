@@ -1,0 +1,26 @@
+.git
+.DS_Store
+node_modules
+**/node_modules
+
+# Local and production secrets must never enter a container build context.
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Local migration artifacts can contain production data snapshots.
+artifacts/migration
+output
+*.dump
+*.sql.gz
+*.log
+
+# Generated outputs are rebuilt inside Docker or uploaded separately by Wrangler.
+**/dist
+**/.turbo
+**/.cache
+coverage
+
+# Large local reference assets are not needed by the API image.
+attached_assets

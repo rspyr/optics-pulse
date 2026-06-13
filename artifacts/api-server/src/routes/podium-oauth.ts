@@ -3,6 +3,7 @@ import { db, usersTable, tenantsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { requireAuth } from "../middleware/auth";
 import { encryptConfig, decryptConfig } from "../lib/encryption";
+import { buildPublicUrl } from "../lib/public-origin";
 import { clearPodiumTokenCache } from "../services/integrations/podium-auth";
 import crypto from "crypto";
 
@@ -57,11 +58,7 @@ function parseSignedState(state: string): { userId: number; nonce: string } | nu
 }
 
 function getRedirectUri(): string {
-  const domain = process.env.REPLIT_DOMAINS?.split(",")[0] || process.env.REPLIT_DEV_DOMAIN;
-  if (domain) {
-    return `https://${domain}/api/oauth/podium/callback`;
-  }
-  return "http://localhost:8080/api/oauth/podium/callback";
+  return buildPublicUrl("/api/oauth/podium/callback");
 }
 
 router.get("/oauth/podium/authorize", requireAuth, async (req, res) => {
@@ -262,10 +259,7 @@ router.get("/oauth/podium/callback", async (req, res) => {
       try {
         const webhookSecret = crypto.randomBytes(32).toString("hex");
 
-        const domain = process.env.REPLIT_DOMAINS?.split(",")[0] || process.env.REPLIT_DEV_DOMAIN;
-        const webhookUrl = domain
-          ? `https://${domain}/api/webhooks/podium`
-          : "http://localhost:8080/api/webhooks/podium";
+        const webhookUrl = buildPublicUrl("/api/webhooks/podium");
 
         const whResponse = await fetch("https://api.podium.com/v4/webhooks", {
           method: "POST",

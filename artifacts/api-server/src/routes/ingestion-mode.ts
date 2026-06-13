@@ -1,6 +1,7 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
 import { db, tenantsTable, trackerHeartbeatsTable, attributionEventsTable, googleSheetConfigsTable, ingestionAuditLogTable, leadStatusHistoryTable } from "@workspace/db";
 import { eq, and, gte, isNotNull, ne, sql, desc } from "drizzle-orm";
+import { getPrimaryPublicOrigin } from "../lib/public-origin";
 
 const router: IRouter = Router();
 
@@ -263,19 +264,10 @@ router.get("/ingestion-mode/gtm-snippet", async (req, res) => {
     return;
   }
 
-  let apiBase: string | null = process.env.API_BASE_URL || null;
-  if (!apiBase) {
-    const prodDomains = process.env.REPLIT_DOMAINS;
-    if (prodDomains) {
-      const primaryDomain = prodDomains.split(",")[0]?.trim();
-      apiBase = `https://${primaryDomain}`;
-    } else if (process.env.REPLIT_DEV_DOMAIN) {
-      apiBase = `https://${process.env.REPLIT_DEV_DOMAIN}`;
-    }
-  }
+  const apiBase = getPrimaryPublicOrigin();
 
   if (!apiBase) {
-    res.status(500).json({ error: "API base URL not configured. Set API_BASE_URL or deploy to Replit." });
+    res.status(500).json({ error: "API base URL not configured. Set API_BASE_URL or APP_PUBLIC_URL." });
     return;
   }
 

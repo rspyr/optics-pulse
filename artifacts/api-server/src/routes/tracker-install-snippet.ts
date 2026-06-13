@@ -3,6 +3,7 @@ import { db, tenantsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { requireRole } from "../middleware/auth";
 import { getDomainHealthRollup } from "../services/tracker-audit";
+import { getPrimaryPublicOrigin } from "../lib/public-origin";
 
 const requireOperator = requireRole("super_admin", "agency_user", "client_admin");
 
@@ -10,11 +11,7 @@ const router: IRouter = Router();
 
 /** Resolve the absolute public origin for the pulse.js script tag. */
 function resolvePublicOrigin(): string {
-  if (process.env.PUBLIC_API_URL) return process.env.PUBLIC_API_URL.replace(/\/$/, "");
-  const fromDomains = process.env.REPLIT_DOMAINS?.split(",")[0]?.trim();
-  if (fromDomains) return `https://${fromDomains}`;
-  if (process.env.REPLIT_DEV_DOMAIN) return `https://${process.env.REPLIT_DEV_DOMAIN}`;
-  return "http://localhost:8080";
+  return getPrimaryPublicOrigin() || "http://localhost:8080";
 }
 
 /** Per-tenant funnel hints surfaced alongside the install snippet. */

@@ -5,6 +5,7 @@ import { eq, and, count, sql, avg, inArray, gte, ne, isNull } from "drizzle-orm"
 import { parseSpiffConfig, computeSpiffCommission } from "./routes/sales-manager";
 import { assignLeadRoundRobin } from "./services/round-robin";
 import { scheduleAutoPass } from "./services/auto-pass-scheduler";
+import { getAllowedOrigins } from "./lib/public-origin";
 
 const DEMO_FIRST_NAMES = ["John", "Sarah", "Michael", "Emily", "David", "Jessica", "Robert", "Amanda", "William", "Jennifer", "James", "Lisa", "Daniel", "Maria", "Christopher"];
 const DEMO_LAST_NAMES = ["Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller", "Davis", "Rodriguez", "Martinez"];
@@ -39,21 +40,7 @@ let io: SocketIOServer | null = null;
 let demoTimer: ReturnType<typeof setTimeout> | null = null;
 
 export function initSocketIO(httpServer: HTTPServer, sessionMiddleware: unknown): SocketIOServer {
-  const allowedOrigins: string[] = [];
-  if (process.env.REPLIT_DEV_DOMAIN) {
-    allowedOrigins.push(`https://${process.env.REPLIT_DEV_DOMAIN}`);
-    const expoVariant = process.env.REPLIT_DEV_DOMAIN.replace(".worf.replit.dev", ".expo.worf.replit.dev");
-    allowedOrigins.push(`https://${expoVariant}`);
-  }
-  if (process.env.REPLIT_DOMAINS) {
-    process.env.REPLIT_DOMAINS.split(",").forEach(d => allowedOrigins.push(`https://${d}`));
-  }
-  if (process.env.REPLIT_EXPO_DEV_DOMAIN) {
-    allowedOrigins.push(`https://${process.env.REPLIT_EXPO_DEV_DOMAIN}`);
-  }
-  if (allowedOrigins.length === 0) {
-    allowedOrigins.push("http://localhost:5173");
-  }
+  const allowedOrigins = getAllowedOrigins();
 
   io = new SocketIOServer(httpServer, {
     cors: {

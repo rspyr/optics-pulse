@@ -9,14 +9,20 @@ const vapidPublic = process.env.VAPID_PUBLIC_KEY;
 const vapidPrivate = process.env.VAPID_PRIVATE_KEY;
 const vapidSubject = process.env.VAPID_SUBJECT || "mailto:admin@marketingos.app";
 const expoAccessToken = process.env.EXPO_ACCESS_TOKEN;
+const expoPushDisabled = process.env.DISABLE_EXPO_PUSH === "true";
+const expoPushEnabled = Boolean(expoAccessToken) && !expoPushDisabled;
 
 const apnsKeyId = process.env.APNS_KEY_ID;
 const apnsTeamId = process.env.APNS_TEAM_ID;
 const apnsBundleId = process.env.APNS_BUNDLE_ID;
+const rawApnsPrivateKey = process.env.APNS_PRIVATE_KEY;
 const rawApnsKeyPath = process.env.APNS_KEY_PATH;
 const apnsKeyPath = rawApnsKeyPath
   ? (isAbsolute(rawApnsKeyPath) ? rawApnsKeyPath : resolve("/home/runner/workspace", rawApnsKeyPath))
   : undefined;
+const apnsKey = rawApnsPrivateKey
+  ? rawApnsPrivateKey.replace(/\\n/g, "\n")
+  : apnsKeyPath;
 
 if (vapidPublic && vapidPrivate) {
   webpush.setVapidDetails(vapidSubject, vapidPublic, vapidPrivate);
@@ -25,21 +31,23 @@ if (vapidPublic && vapidPrivate) {
   console.warn("[Push] VAPID keys not configured — web push disabled");
 }
 
-if (expoAccessToken) {
+if (expoPushDisabled) {
+  console.log("[Push] Expo push disabled; native APNs and web push remain available");
+} else if (expoAccessToken) {
   console.log("[Push] Expo access token configured for authenticated push requests");
 } else {
-  console.warn("[Push] EXPO_ACCESS_TOKEN not set — Expo push requests will be unauthenticated and may fail with InvalidCredentials");
+  console.log("[Push] Expo push not configured; native APNs and web push remain available");
 }
 
 let apnsProvider: apn.Provider | null = null;
-if (apnsKeyId && apnsTeamId && apnsBundleId && apnsKeyPath) {
+if (apnsKeyId && apnsTeamId && apnsBundleId && apnsKey) {
   try {
-    if (!existsSync(apnsKeyPath)) {
-      console.warn(`[Push] APNs key file not found at "${apnsKeyPath}" — iOS native push disabled. Upload the .p8 file and restart.`);
+    if (!rawApnsPrivateKey && apnsKeyPath && !existsSync(apnsKeyPath)) {
+      console.warn(`[Push] APNs key file not found at "${apnsKeyPath}" — iOS native push disabled. Upload the .p8 file or set APNS_PRIVATE_KEY and restart.`);
     } else {
       apnsProvider = new apn.Provider({
         token: {
-          key: apnsKeyPath,
+          key: apnsKey,
           keyId: apnsKeyId,
           teamId: apnsTeamId,
         },
@@ -55,7 +63,7 @@ if (apnsKeyId && apnsTeamId && apnsBundleId && apnsKeyPath) {
   console.warn("[Push] APNs env vars not configured (APNS_KEY_ID, APNS_TEAM_ID, APNS_BUNDLE_ID, APNS_KEY_PATH) — iOS native push disabled");
 }
 
-console.log(`[Push] Startup summary — APNs: ${apnsProvider ? "READY" : "DISABLED"}, Expo: ${expoAccessToken ? "READY" : "UNAUTHENTICATED"}, WebPush: ${vapidPublic && vapidPrivate ? "READY" : "DISABLED"}`);
+console.log(`[Push] Startup summary — APNs: ${apnsProvider ? "READY" : "DISABLED"}, Expo: ${expoPushEnabled ? "READY" : "DISABLED"}, WebPush: ${vapidPublic && vapidPrivate ? "READY" : "DISABLED"}`);
 
 let invalidCredentialsWarned = false;
 
@@ -234,7 +242,8 @@ export async function sendPushToUser(
       return report;
     }
 
-    const expoTokens = tokens.filter(t => t.platform !== "web" && isExpoToken(t.token));
+    const allExpoTokens = tokens.filter(t => t.platform !== "web" && isExpoToken(t.token));
+    const expoTokens = expoPushEnabled ? allExpoTokens : [];
     const apnsTokens = tokens.filter(t => t.platform !== "web" && isApnsNativeToken(t.token));
     const hasWebTokens = tokens.some(t => t.platform === "web");
 
@@ -243,6 +252,9 @@ export async function sendPushToUser(
     );
     if (unclassified.length > 0) {
       console.warn(`[Push] User ${userId} has ${unclassified.length} unclassified token(s) — tokens: ${unclassified.map(t => `"${t.token.substring(0, 20)}..." (platform=${t.platform})`).join(", ")}`);
+    }
+    if (!expoPushEnabled && allExpoTokens.length > 0) {
+      console.log(`[Push] Skipping ${allExpoTokens.length} Expo token(s) for user ${userId} because Expo push is disabled`);
     }
 
     if (expoTokens.length > 0) {

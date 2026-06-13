@@ -3,6 +3,7 @@ import { db, tenantsTable, metaAdAccountsTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { requireRole } from "../middleware/auth";
 import { encryptConfig, decryptConfig } from "../lib/encryption";
+import { getPrimaryPublicOrigin } from "../lib/public-origin";
 import { MetaAPIService, MetaTokenInvalidError } from "../services/integrations/meta";
 import crypto from "crypto";
 
@@ -15,6 +16,8 @@ const SCOPES = "ads_read,ads_management,pages_show_list,pages_read_engagement,bu
 function getRedirectUri(req: Request): string {
   const explicit = process.env.META_REDIRECT_URI;
   if (explicit) return explicit;
+  const configuredOrigin = getPrimaryPublicOrigin();
+  if (configuredOrigin) return `${configuredOrigin}/api/oauth/meta/callback`;
   const host = req.get("host");
   if (host) {
     const forwardedProto = req.get("x-forwarded-proto");
@@ -22,8 +25,6 @@ function getRedirectUri(req: Request): string {
       || (host.startsWith("localhost") || host.startsWith("127.0.0.1") ? "http" : "https");
     return `${proto}://${host}/api/oauth/meta/callback`;
   }
-  const domain = process.env.REPLIT_DOMAINS?.split(",")[0] || process.env.REPLIT_DEV_DOMAIN;
-  if (domain) return `https://${domain}/api/oauth/meta/callback`;
   return "http://localhost:8080/api/oauth/meta/callback";
 }
 

@@ -3,6 +3,7 @@ import { db, tenantsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { requireRole } from "../middleware/auth";
 import { encryptConfig, decryptConfig } from "../lib/encryption";
+import { buildPublicUrl } from "../lib/public-origin";
 import crypto from "crypto";
 
 const router: IRouter = Router();
@@ -12,11 +13,7 @@ const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const SCOPES = "https://www.googleapis.com/auth/adwords";
 
 function getRedirectUri(): string {
-  const domain = process.env.REPLIT_DOMAINS?.split(",")[0] || process.env.REPLIT_DEV_DOMAIN;
-  if (domain) {
-    return `https://${domain}/api/oauth/google-ads/callback`;
-  }
-  return "http://localhost:8080/api/oauth/google-ads/callback";
+  return buildPublicUrl("/api/oauth/google-ads/callback");
 }
 
 router.get("/oauth/google-ads/authorize", requireRole("super_admin", "agency_user"), async (req, res) => {

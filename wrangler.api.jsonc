@@ -1,0 +1,74 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "optics-pulse-app",
+  "main": "workers/optics-pulse-app/src/index.ts",
+  "compatibility_date": "2026-06-12",
+  "workers_dev": true,
+  "routes": [
+    "optics.hvaclaunch.ai/*"
+  ],
+  "assets": {
+    "directory": "./artifacts/marketing-os/dist/public",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": [
+      "/_edge/*",
+      "/_internal/*",
+      "/api/*"
+    ]
+  },
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1
+    }
+  },
+  "vars": {
+    "API_CONTAINER_NAME": "primary-prod-cutover-20260613",
+    "API_BASE_URL": "https://optics.hvaclaunch.ai",
+    "PUBLIC_API_URL": "https://optics.hvaclaunch.ai",
+    "PUBLIC_APP_URL": "https://optics.hvaclaunch.ai",
+    "CLOUDFLARE_AI_MODEL": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    "CLOUDFLARE_AI_FAST_MODEL": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    "APP_ORIGINS": "https://optics-pulse-app.aaron-7dc.workers.dev,https://optics-pulse.aaron-7dc.workers.dev,https://optics-pulse-web.aaron-7dc.workers.dev,https://optics.hvaclaunch.ai,https://hvaclaunch-optics.replit.app",
+    "APP_ALLOWED_ORIGINS": "https://optics-pulse-app.aaron-7dc.workers.dev,https://optics-pulse.aaron-7dc.workers.dev,https://optics-pulse-web.aaron-7dc.workers.dev,https://optics.hvaclaunch.ai,https://hvaclaunch-optics.replit.app",
+    "CORS_ORIGINS": "https://optics-pulse-app.aaron-7dc.workers.dev,https://optics-pulse.aaron-7dc.workers.dev,https://optics-pulse-web.aaron-7dc.workers.dev,https://optics.hvaclaunch.ai,https://hvaclaunch-optics.replit.app",
+    "DISABLE_BACKGROUND_JOBS": "false",
+    "DISABLE_EXPO_PUSH": "true"
+  },
+  "ai": {
+    "binding": "AI"
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "OPTICS_PULSE_API",
+        "class_name": "OpticsPulseApiContainer"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "OpticsPulseApiContainer"
+      ]
+    }
+  ],
+  "containers": [
+    {
+      "name": "optics-pulse-app-opticspulseapicontainer",
+      "class_name": "OpticsPulseApiContainer",
+      "image": "./deploy/api/Dockerfile",
+      "image_build_context": ".",
+      "instance_type": "basic",
+      "max_instances": 2,
+      "rollout_step_percentage": [
+        50,
+        100
+      ],
+      "rollout_active_grace_period": 30
+    }
+  ]
+}
