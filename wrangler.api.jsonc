@@ -34,6 +34,7 @@
     "APP_ORIGINS": "https://optics-pulse-app.aaron-7dc.workers.dev,https://optics-pulse.aaron-7dc.workers.dev,https://optics-pulse-web.aaron-7dc.workers.dev,https://optics.hvaclaunch.ai,https://hvaclaunch-optics.replit.app",
     "APP_ALLOWED_ORIGINS": "https://optics-pulse-app.aaron-7dc.workers.dev,https://optics-pulse.aaron-7dc.workers.dev,https://optics-pulse-web.aaron-7dc.workers.dev,https://optics.hvaclaunch.ai,https://hvaclaunch-optics.replit.app",
     "CORS_ORIGINS": "https://optics-pulse-app.aaron-7dc.workers.dev,https://optics-pulse.aaron-7dc.workers.dev,https://optics-pulse-web.aaron-7dc.workers.dev,https://optics.hvaclaunch.ai,https://hvaclaunch-optics.replit.app",
+    "GOOGLE_SHEETS_AUTH_MODE": "service_account",
     "DISABLE_BACKGROUND_JOBS": "false",
     "DISABLE_EXPO_PUSH": "true"
   },

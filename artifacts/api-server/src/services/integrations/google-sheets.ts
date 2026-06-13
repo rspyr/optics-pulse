@@ -1,5 +1,8 @@
-// Google Sheets integration via Replit Connectors
-import { google } from "googleapis";
+// Google Sheets integration. Cloudflare/Neon production uses a Google Service
+// Account; the Replit Connector path remains as a legacy/local fallback.
+import { google, type sheets_v4 } from "googleapis";
+
+type SheetsClient = sheets_v4.Sheets;
 
 interface ConnectionSettings {
   settings: {
@@ -9,13 +12,22 @@ interface ConnectionSettings {
   };
 }
 
+interface GoogleServiceAccountCredentials {
+  client_email: string;
+  private_key: string;
+  private_key_id?: string;
+}
+
 let connectionSettings: ConnectionSettings | null = null;
 let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+let serviceAccountClient: SheetsClient | null = null;
+let serviceAccountClientKey: string | null = null;
 
 const REFRESH_BUFFER_MS = 5 * 60 * 1000;
 const FALLBACK_REFRESH_MS = 30 * 60 * 1000;
 const RETRY_DELAY_MS = 30 * 1000;
 const MAX_RETRIES = 3;
+const SHEETS_READONLY_SCOPE = "https://www.googleapis.com/auth/spreadsheets.readonly";
 
 // Hard timeouts so a hung network call can never stall the sheet-sync loop
 // indefinitely. Without these, a single never-resolving request freezes ALL
@@ -43,6 +55,98 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
 
 function extractAccessToken(cs: ConnectionSettings | null): string | undefined {
   return cs?.settings?.access_token || cs?.settings?.oauth?.credentials?.access_token;
+}
+
+function configuredAuthMode(): "auto" | "service_account" | "replit_connector" {
+  const raw = process.env.GOOGLE_SHEETS_AUTH_MODE?.trim().toLowerCase();
+  if (raw === "service_account" || raw === "service-account") return "service_account";
+  if (raw === "replit_connector" || raw === "replit-connector" || raw === "replit") return "replit_connector";
+  return "auto";
+}
+
+function decodeServiceAccountJson(raw: string): string {
+  const trimmed = raw.trim();
+  if (trimmed.startsWith("{")) return trimmed;
+
+  try {
+    const decoded = Buffer.from(trimmed, "base64").toString("utf8").trim();
+    if (decoded.startsWith("{")) return decoded;
+  } catch {
+    // Fall through to JSON.parse below so the caller gets a useful error.
+  }
+
+  return trimmed;
+}
+
+function normalizePrivateKey(value: string): string {
+  return value.replace(/\\n/g, "\n").trim();
+}
+
+function readServiceAccountCredentials(): GoogleServiceAccountCredentials | null {
+  const json =
+    process.env.GOOGLE_SHEETS_SERVICE_ACCOUNT_JSON ||
+    process.env.GOOGLE_SHEETS_SERVICE_ACCOUNT_JSON_BASE64 ||
+    process.env.GOOGLE_SERVICE_ACCOUNT_JSON ||
+    process.env.GOOGLE_SERVICE_ACCOUNT_JSON_BASE64;
+
+  if (json?.trim()) {
+    const parsed = JSON.parse(decodeServiceAccountJson(json)) as Partial<GoogleServiceAccountCredentials>;
+    if (!parsed.client_email || !parsed.private_key) {
+      throw new Error("Google Sheets service account JSON is missing client_email or private_key");
+    }
+    return {
+      client_email: parsed.client_email,
+      private_key: normalizePrivateKey(parsed.private_key),
+      private_key_id: parsed.private_key_id,
+    };
+  }
+
+  const clientEmail = process.env.GOOGLE_SHEETS_CLIENT_EMAIL?.trim();
+  const privateKey = process.env.GOOGLE_SHEETS_PRIVATE_KEY?.trim();
+  if (clientEmail && privateKey) {
+    return {
+      client_email: clientEmail,
+      private_key: normalizePrivateKey(privateKey),
+      private_key_id: process.env.GOOGLE_SHEETS_PRIVATE_KEY_ID?.trim(),
+    };
+  }
+
+  return null;
+}
+
+function getServiceAccountCacheKey(credentials: GoogleServiceAccountCredentials): string {
+  return `${credentials.client_email}:${credentials.private_key_id ?? "no-key-id"}`;
+}
+
+async function getServiceAccountGoogleSheetClient(credentials: GoogleServiceAccountCredentials): Promise<SheetsClient> {
+  const cacheKey = getServiceAccountCacheKey(credentials);
+  if (serviceAccountClient && serviceAccountClientKey === cacheKey) {
+    return serviceAccountClient;
+  }
+
+  const auth = new google.auth.JWT({
+    email: credentials.client_email,
+    key: credentials.private_key,
+    scopes: [SHEETS_READONLY_SCOPE],
+  });
+
+  await withTimeout(
+    auth.authorize(),
+    CONNECTOR_FETCH_TIMEOUT_MS,
+    "service account authorization",
+  );
+
+  serviceAccountClient = google.sheets({ version: "v4", auth });
+  serviceAccountClientKey = cacheKey;
+  console.log("[GoogleSheets] Using Google Service Account authentication");
+  return serviceAccountClient;
+}
+
+function hasReplitConnectorConfig(): boolean {
+  return Boolean(
+    process.env.REPLIT_CONNECTORS_HOSTNAME &&
+    (process.env.REPL_IDENTITY || process.env.WEB_REPL_RENEWAL),
+  );
 }
 
 function scheduleProactiveRefresh() {
@@ -73,8 +177,10 @@ async function fetchConnectionSettings(): Promise<string> {
       ? "depl " + process.env.WEB_REPL_RENEWAL
       : null;
 
-  if (!xReplitToken) {
-    throw new Error("X-Replit-Token not found for repl/depl");
+  if (!hostname || !xReplitToken) {
+    throw new Error(
+      "Google Sheets auth is not configured. Set GOOGLE_SHEETS_SERVICE_ACCOUNT_JSON for Cloudflare production.",
+    );
   }
 
   let lastError: unknown;
@@ -144,7 +250,27 @@ async function getAccessToken() {
   return fetchConnectionSettings();
 }
 
-export async function getUncachableGoogleSheetClient() {
+export function getGoogleSheetsAuthProvider(): "service_account" | "replit_connector" | "unconfigured" {
+  const mode = configuredAuthMode();
+  if (mode !== "replit_connector" && readServiceAccountCredentials()) return "service_account";
+  if (mode !== "service_account" && hasReplitConnectorConfig()) return "replit_connector";
+  return "unconfigured";
+}
+
+export async function getUncachableGoogleSheetClient(): Promise<SheetsClient> {
+  const mode = configuredAuthMode();
+  if (mode !== "replit_connector") {
+    const credentials = readServiceAccountCredentials();
+    if (credentials) {
+      return getServiceAccountGoogleSheetClient(credentials);
+    }
+    if (mode === "service_account") {
+      throw new Error(
+        "Google Sheets service account auth is enabled, but GOOGLE_SHEETS_SERVICE_ACCOUNT_JSON is not configured",
+      );
+    }
+  }
+
   const accessToken = await getAccessToken();
 
   const oauth2Client = new google.auth.OAuth2();
@@ -177,12 +303,14 @@ function isAuthError(err: unknown): boolean {
 
 function clearCachedToken() {
   connectionSettings = null;
+  serviceAccountClient = null;
+  serviceAccountClientKey = null;
   lastFetchedAt = 0;
   if (refreshTimer) {
     clearTimeout(refreshTimer);
     refreshTimer = null;
   }
-  console.log("[GoogleSheets] Cleared cached token due to auth error");
+  console.log("[GoogleSheets] Cleared cached auth due to auth error");
 }
 
 export async function readRawSheetData(
